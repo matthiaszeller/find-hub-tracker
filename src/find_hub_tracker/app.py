@@ -1,7 +1,7 @@
-"""Core async polling loop using APScheduler."""
 
 import asyncio
 import signal
+from datetime import timedelta
 
 import structlog
 from apscheduler import AsyncScheduler
@@ -15,15 +15,21 @@ from find_hub_tracker.discord import DiscordPublisher, haversine_distance
 from find_hub_tracker.google_fmd import GoogleFindMyDevices
 from find_hub_tracker.heartbeat import ping_healthchecks, record_heartbeat
 from find_hub_tracker.models import DeviceLocation
+from find_hub_tracker.scheduler import Scheduler
 
 log = structlog.get_logger()
 
 SIGNIFICANT_MOVE_METERS = 100.0
 
+def has_moved_significantly(prev: DeviceLocation | None, cur: DeviceLocation) -> bool:
+    """Determine if the device has moved significantly since the last known location."""
+    if prev is None:
+        return True  # No previous location, so consider it significant
 
-class Poller:
-    """Polls Google Find Hub for device locations on a schedule."""
+    return cur.distance_to(prev) >= SIGNIFICANT_MOVE_METERS
 
+
+class App:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.db: DatabaseBackend = create_backend(settings)
@@ -43,9 +49,9 @@ class Poller:
         self._shutdown_event = asyncio.Event()
         self._poll_count = 0
         self._error_count = 0
+        self._scheduler = Scheduler()
 
     async def start(self) -> None:
-        """Start the polling daemon."""
         await self.db.connect()
         await self.db.migrate()
 
@@ -58,81 +64,64 @@ class Poller:
             devices_filter=self.settings.devices_to_track or "all",
         )
 
-        # Register signal handlers for graceful shutdown
-        loop = asyncio.get_running_loop()
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            try:
-                loop.add_signal_handler(sig, self._signal_handler)
-            except NotImplementedError:
-                signal.signal(sig, lambda s, f: self._signal_handler())
+        # Periodic tasks
 
-        async with AsyncScheduler() as scheduler:
-            # Schedule location polling
-            await scheduler.add_schedule(
-                self.poll_locations,
-                IntervalTrigger(seconds=self.settings.poll_interval_seconds),
-                id="location_poll",
-            )
+        self._scheduler.run_every(
+            self.poll_locations,
+            interval=timedelta(seconds=self.settings.poll_interval_seconds),
+            id="poll_locations"
+        )
 
-            # Schedule battery checks
-            await scheduler.add_schedule(
-                self.check_batteries,
-                IntervalTrigger(seconds=self.settings.battery_check_interval_seconds),
-                id="battery_check",
-            )
+        self._scheduler.run_every(
+            self.check_batteries,
+            interval=timedelta(seconds=self.settings.battery_check_interval_seconds),
+            id="battery_check"
+        )
 
-            # Schedule periodic summary
-            await scheduler.add_schedule(
-                self.post_summary,
-                IntervalTrigger(hours=self.settings.summary_interval_hours),
-                id="periodic_summary",
-            )
+        self._scheduler.run_every(
+            self.post_summary,
+            interval=timedelta(hours=self.settings.summary_interval_hours),
+            id="summary_post"
+        )
 
-            # Schedule history pruning (once daily)
-            await scheduler.add_schedule(
-                self.prune_history,
-                IntervalTrigger(hours=24),
-                id="history_prune",
-            )
+        self._scheduler.run_every(
+            self.prune_history,
+            interval=timedelta(hours=24),
+            id="history_prune"
+        )
 
-            # Run an immediate poll on startup
-            log.info("initial_poll")
-            await self.poll_locations()
+        # Post-startup tasks
 
-            # Post startup message
-            try:
-                devices = await self.fmd.list_devices()
-                await self.publisher.post_startup(len(devices))
-            except Exception:
-                await self.publisher.post_startup(0)
+        self._scheduler.run_once(
+            self.post_startup,
+            id="post_startup",
+        )
 
-            if not self.settings.healthchecks_ping_url:
-                log.warning(
-                    "healthchecks_not_configured",
-                    message="HEALTHCHECKS_PING_URL not set — no external dead man's switch",
-                )
+        # Cleanup
 
-            log.info("poller_running", message="Polling daemon started. Press Ctrl+C to stop.")
+        self._scheduler.on_shutdown(self.shutdown)
 
-            # Wait for shutdown signal
-            await self._shutdown_event.wait()
+        # Run
 
-        # Graceful shutdown
+        await self._scheduler.run()
+
+    async def post_startup(self):
+        devices = await self.fmd.list_devices()
+        await self.publisher.post_startup(len(devices))
+
+    async def shutdown(self):
+        log.debug("shutdown_initiated")
         await self.publisher.post_shutdown()
         await self.publisher.close()
         await self.db.close()
-        log.info("poller_stopped")
-
-    def _signal_handler(self) -> None:
-        """Handle shutdown signals gracefully."""
-        log.info("shutdown_requested")
-        self._shutdown_event.set()
+        log.info("shutdown_complete")
 
     async def poll_locations(self) -> None:
         """Execute a single polling cycle: query devices, compare, persist, publish."""
         try:
             device_filter = self.settings.devices_to_track_list or None
 
+            log.debug("get_all_locations", device_filter=device_filter)
             locations = await self.fmd.get_all_locations(device_filter)
             if not locations:
                 log.warning("no_locations_returned")
@@ -144,7 +133,7 @@ class Poller:
                 prev = await self.db.get_last_location(loc.device_id)
                 await self.db.store_location(loc)
 
-                if _has_moved_significantly(prev, loc):
+                if has_moved_significantly(prev, loc):
                     await self.publisher.post_location_update(loc, prev)
                     log.info(
                         "location_updated",
@@ -175,6 +164,7 @@ class Poller:
                 version=__version__,
             )
             log.exception("poll_cycle_error")
+
 
     async def check_batteries(self) -> None:
         """Check battery levels for all tracked devices."""
@@ -207,20 +197,3 @@ class Poller:
                 log.info("history_pruned", records_deleted=count)
         except Exception:
             log.exception("prune_error")
-
-
-def _has_moved_significantly(
-    previous: DeviceLocation | None,
-    current: DeviceLocation,
-) -> bool:
-    """Check if a device has moved more than SIGNIFICANT_MOVE_METERS."""
-    if previous is None:
-        return True
-
-    distance = haversine_distance(
-        previous.latitude,
-        previous.longitude,
-        current.latitude,
-        current.longitude,
-    )
-    return distance > SIGNIFICANT_MOVE_METERS

@@ -1,9 +1,11 @@
 """Pydantic models for device data."""
 
 from datetime import UTC, datetime
+from typing import Self
 
 from pydantic import BaseModel, Field
 
+from find_hub_tracker.utils.geo import haversine_distance
 
 class DeviceInfo(BaseModel):
     """A registered Find Hub device."""
@@ -33,6 +35,14 @@ class DeviceLocation(BaseModel):
     def maps_url(self) -> str:
         """Google Maps URL for this location."""
         return f"https://www.google.com/maps?q={self.latitude},{self.longitude}"
+
+    def distance_to(self, other: Self) -> float:
+        return haversine_distance(
+            self.latitude,
+            self.longitude,
+            other.latitude,
+            other.longitude
+        )
 
 
 class BatteryAlert(BaseModel):

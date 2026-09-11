@@ -55,10 +55,10 @@ def start() -> None:
             "Location updates will be stored locally but not posted to Discord."
         )
 
-    from find_hub_tracker.poller import Poller
+    from find_hub_tracker.app import App
 
-    poller = Poller(settings)
-    asyncio.run(poller.start())
+    app = App(settings)
+    asyncio.run(app.start())
 
 
 @cli.command()

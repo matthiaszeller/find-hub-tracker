@@ -15,12 +15,16 @@ upstream adds support.
 import asyncio
 import contextlib
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
 
 from find_hub_tracker.models import DeviceLocation
+from .location import get_location_data_for_device, parse_location_output, LocationRequestError, LocationRequestTimeout
+from .device import Device, list_devices
+from ..utils.cache import AsyncTTLCache
 
 log = structlog.get_logger()
 
@@ -31,7 +35,6 @@ _LOCATION_STATUS_MAP = {
     2: "crowdsourced",
     3: "aggregated",
 }
-
 
 class AuthError(Exception):
     """Raised when Google authentication is missing or invalid."""
@@ -46,7 +49,7 @@ class GoogleFindMyDevices:
 
     def __init__(self, auth_dir: str = "Auth") -> None:
         self.auth_dir = Path(auth_dir)
-        self._devices_cache: list[tuple[str, str]] | None = None
+        self._devices_cache: AsyncTTLCache[list[Device]] = AsyncTTLCache(ttl=30)
         self._cache_time: float = 0
         self._cache_ttl: float = 300
         self._gfmt_available = False
@@ -89,39 +92,27 @@ class GoogleFindMyDevices:
                 "Clone it and add its directory to PYTHONPATH, or vendor the modules."
             )
 
-    async def list_devices(self) -> list[tuple[str, str]]:
+    async def list_devices(self) -> list[Device]:
         """List all registered Find Hub devices.
 
         Returns:
-            List of (device_name, canonic_id) tuples.
+            List of Device objects.
         """
-        self._check_available()
-        self._check_auth()
+        async def inner() -> list[Device]:
+            self._check_available()
+            self._check_auth()
 
-        if self._devices_cache and (time.monotonic() - self._cache_time) < self._cache_ttl:
-            return self._devices_cache
+            devices = await asyncio.to_thread(list_devices)
+            log.info("devices_listed", count=len(devices))
+            return devices
 
-        devices = await asyncio.to_thread(self._list_devices_sync)
-        self._devices_cache = devices
-        self._cache_time = time.monotonic()
-        log.info("devices_listed", count=len(devices))
-        return devices
+        return await self._devices_cache.get_or_set(inner)
 
-    def _list_devices_sync(self) -> list[tuple[str, str]]:
-        """Synchronous device listing (runs in thread)."""
-        from NovaApi.ListDevices.nbe_list_devices import request_device_list
-        from ProtoDecoders.decoder import get_canonic_ids, parse_device_list_protobuf
-
-        hex_result = request_device_list()
-        device_list = parse_device_list_protobuf(hex_result)
-        return get_canonic_ids(device_list)
-
-    async def get_device_location(self, canonic_id: str, device_name: str) -> DeviceLocation | None:
+    async def get_device_location(self, device: Device) -> DeviceLocation | None:
         """Request and retrieve the current location for a device.
 
         Args:
-            canonic_id: The device's canonical ID from list_devices().
-            device_name: Human-readable device name.
+            device: The device object for which to get location information.
 
         Returns:
             DeviceLocation if a location was obtained, None otherwise.
@@ -130,87 +121,15 @@ class GoogleFindMyDevices:
         self._check_auth()
 
         try:
-            return await asyncio.to_thread(self._get_location_sync, canonic_id, device_name)
-        except Exception:
-            log.exception("location_request_failed", device=device_name)
+            output = await asyncio.to_thread(get_location_data_for_device, device.canonic_id, device.name, timeout=30)
+            return parse_location_output(output, device.canonic_id, device.name)
+
+        except LocationRequestTimeout:
+            log.warning("location_request_timeout", device=device.name)
             return None
-
-    def _get_location_sync(self, canonic_id: str, device_name: str) -> DeviceLocation | None:
-        """Synchronous location retrieval (runs in thread).
-
-        The upstream function prints locations to stdout. We capture the output
-        and parse it. This is fragile but avoids deep modifications to the library.
-        """
-        import io
-        from contextlib import redirect_stdout
-
-        from NovaApi.ExecuteAction.LocateTracker.location_request import (
-            get_location_data_for_device,
-        )
-
-        captured = io.StringIO()
-        try:
-            with redirect_stdout(captured):
-                get_location_data_for_device(canonic_id, device_name)
-        except Exception:
-            log.exception("gfmt_location_error", device=device_name)
+        except LocationRequestError:
+            log.exception("location_request_failed", device=device.name)
             return None
-
-        output = captured.getvalue()
-        return self._parse_location_output(output, canonic_id, device_name)
-
-    def _parse_location_output(
-        self, output: str, canonic_id: str, device_name: str
-    ) -> DeviceLocation | None:
-        """Parse the console output from GoogleFindMyTools into a DeviceLocation.
-
-        The library prints lines like:
-            Latitude: 47.1234567
-            Longitude: -122.1234567
-            Altitude: 50
-            Time: 1711234567
-            Accuracy: 25.0
-            Status: LAST_KNOWN(1)
-            Is own report: True
-        """
-        lat = lng = accuracy = None
-        timestamp = None
-
-        for line in output.splitlines():
-            line = line.strip()
-            if line.startswith("Latitude:"):
-                with contextlib.suppress(ValueError):
-                    lat = float(line.split(":", 1)[1].strip())
-            elif line.startswith("Longitude:"):
-                with contextlib.suppress(ValueError):
-                    lng = float(line.split(":", 1)[1].strip())
-            elif line.startswith("Time:"):
-                try:
-                    unix_ts = int(line.split(":", 1)[1].strip())
-                    timestamp = datetime.fromtimestamp(unix_ts, tz=UTC)
-                except ValueError:
-                    pass
-            elif line.startswith("Accuracy:"):
-                with contextlib.suppress(ValueError):
-                    accuracy = float(line.split(":", 1)[1].strip())
-
-        if lat is None or lng is None:
-            log.warning("location_parse_failed", device=device_name, output=output[:200])
-            return None
-
-        now = datetime.now(UTC)
-        return DeviceLocation(
-            device_id=canonic_id,
-            device_name=device_name,
-            device_type="unknown",
-            latitude=lat,
-            longitude=lng,
-            accuracy_meters=accuracy,
-            timestamp=timestamp or now,
-            polled_at=now,
-            battery_percent=None,
-            is_charging=None,
-        )
 
     async def get_all_locations(
         self, device_filter: list[str] | None = None
@@ -228,11 +147,11 @@ class GoogleFindMyDevices:
 
         if device_filter:
             filter_lower = {n.lower() for n in device_filter}
-            devices = [(name, cid) for name, cid in devices if name.lower() in filter_lower]
+            devices = [d for d in devices if d.name.lower() in filter_lower]
 
         locations = []
-        for device_name, canonic_id in devices:
-            loc = await self.get_device_location(canonic_id, device_name)
+        for device in devices:
+            loc = await self.get_device_location(device)
             if loc:
                 locations.append(loc)
 
