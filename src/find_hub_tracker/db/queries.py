@@ -59,7 +59,7 @@ def get_all_latest_locations(session: Session) -> list[DeviceLocation]:
         select(DeviceLocation)
         .join(
             ranked,
-            DeviceLocation.device_id == ranked.c.device_id,
+            DeviceLocation.id == ranked.c.id,
         )
         .where(ranked.c.row_number == 1)
         .order_by(DeviceLocation.device_id)

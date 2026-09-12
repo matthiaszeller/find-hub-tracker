@@ -16,12 +16,19 @@ def get_engine(settings: Settings) -> Engine:
 
 
 @contextmanager
-def get_session(engine: Engine, *, commit: bool = False):
-    with Session(engine) as session:
-        yield session
+def get_session(
+    engine: Engine, *, commit: bool = False, expire_on_commit: bool = False
+):
+    with Session(engine, expire_on_commit=expire_on_commit) as session:
+        try:
+            yield session
 
-        if commit:
-            session.commit()
+            if commit:
+                session.commit()
+        except Exception:
+            # not absolutely needed but make it explicit
+            session.rollback()
+            raise
 
 
 def run_migrations(engine: Engine) -> None:
