@@ -9,9 +9,9 @@ from find_hub_tracker import __version__
 from find_hub_tracker.battery import BatteryMonitor
 from find_hub_tracker.config import Settings
 from find_hub_tracker.db import queries
-from find_hub_tracker.db.core import get_engine, get_session
+from find_hub_tracker.db.core import get_engine, get_session, run_migrations
 from find_hub_tracker.discord import DiscordPublisher
-from find_hub_tracker.google_fmd import GoogleFindMyDevices, Device
+from find_hub_tracker.google_fmd import GoogleFindMyDevices
 from find_hub_tracker.heartbeat import ping_healthchecks, record_heartbeat, make_heartbeat
 from find_hub_tracker.models import DeviceLocation, DeviceInfo, ServiceHeartBeat
 from find_hub_tracker.scheduler import Scheduler
@@ -74,8 +74,7 @@ class App:
             yield session
 
     async def start(self) -> None:
-        await self.db.connect()
-        await self.db.migrate()
+        run_migrations(self._db_engine)
 
         log.info(
             "app_starting",
