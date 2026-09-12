@@ -73,12 +73,13 @@ class TestUpsertDevice:
         assert result is original
         assert result is not incoming
 
-    def test_does_not_autocommit(self, session, make_device):
+    def test_does_not_autocommit(self, session_maker, make_device):
         device = make_device(id="d1")
-        upsert_device(session, device)
-        session.rollback()
+        with session_maker() as session:
+            upsert_device(session, device)
 
-        assert session.get(DeviceInfo, "d1") is None
+        with session_maker() as session:
+            assert session.get(DeviceInfo, "d1") is None
 
 
 class TestGetAllDevices:

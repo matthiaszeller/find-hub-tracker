@@ -212,21 +212,22 @@ class TestPruneOldLocations:
         assert deleted_count == 3
 
     def test_does_not_autocommit(
-        self, session, make_device, make_location, days_ago, monkeypatch
+        self, session_maker, make_device, make_location, days_ago, monkeypatch
     ):
         """prune_old_locations documents that the caller is responsible
         for committing. Delete, roll back instead of committing, and
         confirm the row was never actually removed."""
-        session.add(make_device(id="d1"))
-        old = make_location(device_id="d1", polled_at=days_ago(30))
-        session.add(old)
-        session.commit()
-        location_id = old.id
+        with session_maker() as session:
+            session.add(make_device(id="d1"))
+            old = make_location(device_id="d1", polled_at=days_ago(30))
+            session.add(old)
+            session.commit()
+            location_id = old.id
 
-        prune_old_locations(session, days=7)
-        session.rollback()
+            prune_old_locations(session, days=7)
 
-        assert session.get(DeviceLocation, location_id) is not None
+        with session_maker() as session:
+            assert session.get(DeviceLocation, location_id) is not None
 
 
 class TestExportLocations:

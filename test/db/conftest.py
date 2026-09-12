@@ -1,3 +1,5 @@
+from contextlib import contextmanager
+
 import pytest
 from sqlalchemy import StaticPool, create_engine
 from sqlmodel import Session
@@ -28,9 +30,19 @@ def engine(fresh_engine):
     return fresh_engine
 
 
+@pytest.fixture
+def session_maker(engine):
+    @contextmanager
+    def _make():
+        with Session(engine, expire_on_commit=False) as session:
+            yield session
+
+    return _make
+
+
 @pytest.fixture()
-def session(engine):
+def session(session_maker):
     """A session per test, matching the expire_on_commit=False default
     used by find_hub_tracker.core.get_session."""
-    with Session(engine, expire_on_commit=False) as session:
+    with session_maker() as session:
         yield session
