@@ -136,3 +136,14 @@ def days_ago():
         return BASE_TIME - timedelta(days=n)
 
     return _days_ago
+
+
+@pytest.fixture()
+def minutes_ago():
+    """Helper to build timestamps relative to BASE_TIME, e.g.
+    minutes_ago(2) -> BASE_TIME - 2 minutes. Use for readable ordering tests."""
+
+    def _minutes_ago(n):
+        return BASE_TIME - timedelta(minutes=n)
+
+    return _minutes_ago
