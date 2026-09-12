@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     discord_webhook_url: str = ""
     discord_battery_webhook_url: str = ""
 
+    # Telegram
+    telegram_bot_token: str | None = None
+    telegram_chat_id: int | str | None = None
+
     # Polling
     poll_interval_seconds: int = 300
     battery_check_interval_seconds: int = 900

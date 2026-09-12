@@ -9,13 +9,13 @@ from find_hub_tracker.battery import BatteryMonitor
 from find_hub_tracker.config import Settings
 from find_hub_tracker.db import queries
 from find_hub_tracker.db.core import get_engine, get_session, run_migrations
-from find_hub_tracker.discord import DiscordPublisher
 from find_hub_tracker.google_fmd import GoogleFindMyDevices
 from find_hub_tracker.heartbeat import (
     make_heartbeat,
     ping_healthchecks,
 )
 from find_hub_tracker.models import DeviceInfo, DeviceLocation
+from find_hub_tracker.publisher import TelegramPublisher
 from find_hub_tracker.scheduler import Scheduler
 
 log = structlog.get_logger()
@@ -57,9 +57,8 @@ class App:
         self.fmd = GoogleFindMyDevices(
             auth_dir=str(settings.auth_secrets_path).rsplit("/", 1)[0]
         )
-        self.publisher = DiscordPublisher(
-            webhook_url=settings.discord_webhook_url,
-            battery_webhook_url=settings.battery_webhook_url,
+        self.publisher = TelegramPublisher(
+            settings.telegram_bot_token, settings.telegram_chat_id
         )
         self.battery_monitor = BatteryMonitor(
             low_threshold=settings.battery_low_threshold_percent,
@@ -73,8 +72,10 @@ class App:
         self._db_engine = get_engine(self.settings)
 
     @contextmanager
-    def get_db(self, *, commit: bool = False):
-        with get_session(self._db_engine, commit=commit) as session:
+    def get_db(self, *, commit: bool = False, expire_on_commit: bool = False):
+        with get_session(
+            self._db_engine, commit=commit, expire_on_commit=expire_on_commit
+        ) as session:
             yield session
 
     async def start(self) -> None:
@@ -114,6 +115,8 @@ class App:
 
         # Post-startup tasks
 
+        self._scheduler.run_once(self.post_summary, id="first_summary_post")
+
         self._scheduler.run_once(
             self.post_startup,
             id="post_startup",
@@ -129,7 +132,7 @@ class App:
 
     async def post_startup(self):
         devices = await self.fmd.list_devices()
-        await self.publisher.post_startup(len(devices))
+        await self.publisher.post_startup(devices)
 
     async def shutdown(self):
         log.debug("shutdown_initiated")
@@ -178,25 +181,38 @@ class App:
         location_events = []
         next_poll_count = self._poll_count + 1
 
-        with self.get_db(commit=True) as db:
-            for device in devices:
-                queries.upsert_device(db, device)
+        device_by_device_id: dict[str, DeviceInfo] = {}
 
+        with self.get_db(expire_on_commit=False) as db:
+            for device in devices:
+                inserted = queries.upsert_device(db, device)
+                device_by_device_id[inserted.id] = inserted
+
+            # snapshot of latest before inserting new rows
             last_by_device_id = {
                 loc.device_id: loc for loc in queries.get_all_latest_locations(db)
             }
 
+            db.add_all(locations)
+            db.commit()
+
             for location in locations:
                 previous = last_by_device_id.get(location.device_id)
-                location_events.append((location, previous))
 
-                db.add(location)
+                # populate device field for downstream usage
+                if device := device_by_device_id.get(location.device_id):
+                    location.device = device
+                    if previous is not None:
+                        previous.device = device
+
+                location_events.append((location, previous))
 
             heartbeat = make_heartbeat(
                 poll_count=next_poll_count,
                 error_count=self._error_count,
             )
             queries.upsert_heartbeat(db, heartbeat)
+            db.commit()
 
         self._poll_count = next_poll_count
 
@@ -254,10 +270,11 @@ class App:
     async def post_summary(self) -> None:
         """Post a periodic summary of all device locations to Discord."""
         with self.get_db() as db:
+            devices = queries.get_all_devices(db)
             latest = queries.get_all_latest_locations(db)
 
         if latest:
-            await self.publisher.post_summary(latest)
+            await self.publisher.post_summary(devices, latest)
             log.info("summary_posted", devices=len(latest))
 
     @handle_error("prune_error")
