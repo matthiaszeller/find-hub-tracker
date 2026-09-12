@@ -59,7 +59,7 @@ async def _export(fmt: str, output: str | None, device: str | None, days: int | 
             all_devices = await db.get_all_devices()
             for dev in all_devices:
                 if dev.name.lower() == device.lower():
-                    device_id = dev.device_id
+                    device_id = dev.id
                     break
             if device_id is None:
                 click.echo(f"Device '{device}' not found in database.", err=True)

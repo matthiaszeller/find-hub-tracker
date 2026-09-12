@@ -12,9 +12,7 @@ class Settings(BaseSettings):
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
     # Database
-    db_backend: str = "sqlite"
-    database_url: str = "postgresql://tracker:tracker@localhost:5432/find_hub_tracker"
-    sqlite_path: str = "./data/tracker_history.db"
+    database_url: str = "sqlite:///data/tracker_history.db"
 
     # Discord
     discord_webhook_url: str = ""
@@ -56,24 +54,10 @@ class Settings(BaseSettings):
             return []
         return [d.strip() for d in self.devices_to_track.split(",") if d.strip()]
 
-    @field_validator("db_backend", mode="after")
-    @classmethod
-    def validate_db_backend(cls, v: str) -> str:
-        """Ensure db_backend is postgres or sqlite."""
-        v = v.lower()
-        if v not in ("postgres", "sqlite"):
-            raise ValueError("DB_BACKEND must be 'postgres' or 'sqlite'")
-        return v
-
     @property
     def battery_webhook_url(self) -> str:
         """Return the battery webhook URL, falling back to the main webhook."""
         return self.discord_battery_webhook_url or self.discord_webhook_url
-
-    @property
-    def sqlite_path_resolved(self) -> Path:
-        """Return the SQLite database path as a resolved Path object."""
-        return Path(self.sqlite_path).resolve()
 
 
 _settings: Settings | None = None

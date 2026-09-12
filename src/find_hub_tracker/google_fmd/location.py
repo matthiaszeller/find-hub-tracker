@@ -18,6 +18,8 @@ from GoogleFindMyTools.NovaApi.util import generate_random_uuid
 from GoogleFindMyTools.ProtoDecoders.decoder import parse_device_update_protobuf
 
 from find_hub_tracker.models import DeviceLocation
+from find_hub_tracker.utils import utc_now
+
 
 class LocationRequestError(Exception):
     """Nova API rejected the request outright."""
@@ -111,54 +113,52 @@ def get_location_data_for_device(canonic_device_id, name, timeout=30) -> str:
 
 
 def parse_location_output(
-    output: str, canonic_id: str, device_name: str
+    output: str, canonic_id: str
 ) -> DeviceLocation | None:
-        """Parse the console output from GoogleFindMyTools into a DeviceLocation.
+    """Parse the console output from GoogleFindMyTools into a DeviceLocation.
 
-        The library prints lines like:
-            Latitude: 47.1234567
-            Longitude: -122.1234567
-            Altitude: 50
-            Time: 1711234567
-            Accuracy: 25.0
-            Status: LAST_KNOWN(1)
-            Is own report: True
-        """
-        lat = lng = accuracy = None
-        timestamp = None
+    The library prints lines like:
+        Latitude: 47.1234567
+        Longitude: -122.1234567
+        Altitude: 50
+        Time: 1711234567
+        Accuracy: 25.0
+        Status: LAST_KNOWN(1)
+        Is own report: True
+    """
+    lat = lng = accuracy = None
+    timestamp = None
 
-        for line in output.splitlines():
-            line = line.strip()
-            if line.startswith("Latitude:"):
-                with contextlib.suppress(ValueError):
-                    lat = float(line.split(":", 1)[1].strip())
-            elif line.startswith("Longitude:"):
-                with contextlib.suppress(ValueError):
-                    lng = float(line.split(":", 1)[1].strip())
-            elif line.startswith("Time:"):
-                try:
-                    unix_ts = int(line.split(":", 1)[1].strip())
-                    timestamp = datetime.fromtimestamp(unix_ts, tz=UTC)
-                except ValueError:
-                    pass
-            elif line.startswith("Accuracy:"):
-                with contextlib.suppress(ValueError):
-                    accuracy = float(line.split(":", 1)[1].strip())
+    for line in output.splitlines():
+        line = line.strip()
+        if line.startswith("Latitude:"):
+            with contextlib.suppress(ValueError):
+                lat = float(line.split(":", 1)[1].strip())
+        elif line.startswith("Longitude:"):
+            with contextlib.suppress(ValueError):
+                lng = float(line.split(":", 1)[1].strip())
+        elif line.startswith("Time:"):
+            try:
+                unix_ts = int(line.split(":", 1)[1].strip())
+                timestamp = datetime.fromtimestamp(unix_ts, tz=UTC)
+            except ValueError:
+                pass
+        elif line.startswith("Accuracy:"):
+            with contextlib.suppress(ValueError):
+                accuracy = float(line.split(":", 1)[1].strip())
 
-        if lat is None or lng is None:
-            log.warning("location_parse_failed", device=device_name, output=output[:200])
-            return None
+    if lat is None or lng is None:
+        log.warning("location_parse_failed", device=canonic_id, output=output[:200])
+        return None
 
-        now = datetime.now(UTC)
-        return DeviceLocation(
-            device_id=canonic_id,
-            device_name=device_name,
-            device_type="unknown",
-            latitude=lat,
-            longitude=lng,
-            accuracy_meters=accuracy,
-            timestamp=timestamp or now,
-            polled_at=now,
-            battery_percent=None,
-            is_charging=None,
-        )
+    now = utc_now()
+    return DeviceLocation(
+        device_id=canonic_id,
+        latitude=lat,
+        longitude=lng,
+        accuracy_meters=accuracy,
+        timestamp=timestamp or now,
+        polled_at=now,
+        battery_percent=None,
+        is_charging=None,
+    )

@@ -1,20 +1,17 @@
-
-import asyncio
-import signal
+from contextlib import contextmanager
 from datetime import timedelta
 
 import structlog
-from apscheduler import AsyncScheduler
-from apscheduler.triggers.interval import IntervalTrigger
 
 from find_hub_tracker import __version__
 from find_hub_tracker.battery import BatteryMonitor
 from find_hub_tracker.config import Settings
-from find_hub_tracker.db import DatabaseBackend, create_backend
-from find_hub_tracker.discord import DiscordPublisher, haversine_distance
-from find_hub_tracker.google_fmd import GoogleFindMyDevices
-from find_hub_tracker.heartbeat import ping_healthchecks, record_heartbeat
-from find_hub_tracker.models import DeviceLocation
+from find_hub_tracker.db import queries
+from find_hub_tracker.db.core import get_engine, get_session
+from find_hub_tracker.discord import DiscordPublisher
+from find_hub_tracker.google_fmd import GoogleFindMyDevices, Device
+from find_hub_tracker.heartbeat import ping_healthchecks, record_heartbeat, make_heartbeat
+from find_hub_tracker.models import DeviceLocation, DeviceInfo, ServiceHeartBeat
 from find_hub_tracker.scheduler import Scheduler
 
 log = structlog.get_logger()
@@ -32,35 +29,36 @@ def has_moved_significantly(prev: DeviceLocation | None, cur: DeviceLocation) ->
 class App:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.db: DatabaseBackend = create_backend(settings)
         self.fmd = GoogleFindMyDevices(auth_dir=str(settings.auth_secrets_path).rsplit("/", 1)[0])
         self.publisher = DiscordPublisher(
             webhook_url=settings.discord_webhook_url,
             battery_webhook_url=settings.battery_webhook_url,
         )
         self.battery_monitor = BatteryMonitor(
-            db=self.db,
-            publisher=self.publisher,
             low_threshold=settings.battery_low_threshold_percent,
             critical_threshold=settings.battery_critical_threshold_percent,
             wearable_offset=settings.wearable_threshold_offset,
             cooldown_minutes=settings.alert_cooldown_minutes,
         )
-        self._shutdown_event = asyncio.Event()
         self._poll_count = 0
         self._error_count = 0
         self._scheduler = Scheduler()
+        self._db_engine = get_engine(self.settings)
+
+    @contextmanager
+    def get_db(self, *, commit: bool = False):
+        with get_session(self._db_engine, commit=commit) as session:
+            yield session
 
     async def start(self) -> None:
         await self.db.connect()
         await self.db.migrate()
 
         log.info(
-            "poller_starting",
+            "app_starting",
             poll_interval=self.settings.poll_interval_seconds,
             battery_interval=self.settings.battery_check_interval_seconds,
             summary_interval_hours=self.settings.summary_interval_hours,
-            db_backend=self.settings.db_backend,
             devices_filter=self.settings.devices_to_track or "all",
         )
 
@@ -113,87 +111,153 @@ class App:
         log.debug("shutdown_initiated")
         await self.publisher.post_shutdown()
         await self.publisher.close()
-        await self.db.close()
+        self._db_engine.dispose()
         log.info("shutdown_complete")
 
+    async def _fetch_locations(
+            self,
+    ) -> tuple[list[DeviceInfo], list[DeviceLocation]]:
+        device_filter = self.settings.devices_to_track_list or None
+
+        log.debug("get_all_locations", device_filter=device_filter)
+
+        locations = await self.fmd.get_all_locations(device_filter)
+
+        if not locations:
+            log.warning("no_locations_returned")
+            return [], []
+
+        devices = await self.fmd.list_devices()  # cached
+
+        log.info("poll_cycle", devices_found=len(locations))
+
+        return devices, locations
+
     async def poll_locations(self) -> None:
-        """Execute a single polling cycle: query devices, compare, persist, publish."""
         try:
-            device_filter = self.settings.devices_to_track_list or None
+            devices, locations = await self._fetch_locations()
 
-            log.debug("get_all_locations", device_filter=device_filter)
-            locations = await self.fmd.get_all_locations(device_filter)
-            if not locations:
-                log.warning("no_locations_returned")
-                return
+            events = self._persist_poll(devices, locations)
 
-            log.info("poll_cycle", devices_found=len(locations))
+            await self._publish_location_events(events)
 
-            for loc in locations:
-                prev = await self.db.get_last_location(loc.device_id)
-                await self.db.store_location(loc)
-
-                if has_moved_significantly(prev, loc):
-                    await self.publisher.post_location_update(loc, prev)
-                    log.info(
-                        "location_updated",
-                        device=loc.device_name,
-                        lat=loc.latitude,
-                        lng=loc.longitude,
-                    )
-                else:
-                    log.debug("location_unchanged", device=loc.device_name)
-
-            # Heartbeat on success
-            self._poll_count += 1
-            await ping_healthchecks(self.settings.healthchecks_ping_url, success=True)
-            await record_heartbeat(
-                self.db,
-                poll_count=self._poll_count,
-                error_count=self._error_count,
-                version=__version__,
+            await ping_healthchecks(
+                self.settings.healthchecks_ping_url,
+                success=True,
             )
 
         except Exception:
-            self._error_count += 1
-            await ping_healthchecks(self.settings.healthchecks_ping_url, success=False)
-            await record_heartbeat(
-                self.db,
-                poll_count=self._poll_count,
-                error_count=self._error_count,
-                version=__version__,
-            )
-            log.exception("poll_cycle_error")
+            await self._handle_poll_failure()
 
+    def _persist_poll(
+            self,
+            devices: list[DeviceInfo],
+            locations: list[DeviceLocation],
+    ) -> list[tuple[DeviceLocation, DeviceLocation | None]]:
+        location_events = []
+        next_poll_count = self._poll_count + 1
+
+        with self.get_db(commit=True) as db:
+            for device in devices:
+                queries.upsert_device(db, device)
+
+            last_by_device_id = {
+                loc.device_id: loc
+                for loc in queries.get_all_latest_locations(db)
+            }
+
+            for location in locations:
+                previous = last_by_device_id.get(location.device_id)
+                location_events.append((location, previous))
+
+                db.add(location)
+
+            heartbeat = make_heartbeat(
+                poll_count=next_poll_count,
+                error_count=self._error_count,
+            )
+            queries.upsert_heartbeat(db, heartbeat)
+
+        self._poll_count = next_poll_count
+
+        return location_events
+
+    async def _publish_location_events(
+            self,
+            location_events: list[tuple[DeviceLocation, DeviceLocation | None]],
+    ) -> None:
+        for location, previous in location_events:
+            if not has_moved_significantly(previous, location):
+                continue
+
+            await self.publisher.post_location_update(location, previous)
+
+    async def _handle_poll_failure(self) -> None:
+        self._error_count += 1
+
+        log.exception("poll_cycle_error")
+
+        try:
+            with self.get_db(commit=True) as db:
+                heartbeat = make_heartbeat(
+                    poll_count=self._poll_count,
+                    error_count=self._error_count,
+                )
+                queries.upsert_heartbeat(db, heartbeat)
+        except Exception:
+            log.warning("heartbeat_record_failed", exc_info=True)
+
+        await ping_healthchecks(
+            self.settings.healthchecks_ping_url,
+            success=False,
+        )
 
     async def check_batteries(self) -> None:
         """Check battery levels for all tracked devices."""
         try:
-            latest = await self.db.get_all_latest()
-            if not latest:
-                return
+            alerts = []
 
-            alerts = await self.battery_monitor.check_all(latest)
+            with self.get_db() as db:
+                candidates = queries.get_battery_check_data(db)
+
+                for device, location, last_alert in candidates:
+                    alert = self.battery_monitor.check(device, location, last_alert)
+                    if alert:
+                        db.add(alert)
+                        alerts.append(alert)
+
+            for alert in alerts:
+                await self.publisher.post_battery_alert(alert)
+
             if alerts:
                 log.info("battery_alerts_sent", count=len(alerts))
+
         except Exception:
             log.exception("battery_check_error")
 
     async def post_summary(self) -> None:
         """Post a periodic summary of all device locations to Discord."""
         try:
-            latest = await self.db.get_all_latest()
+            with self.get_db() as db:
+                latest = queries.get_all_latest_locations(db)
+
             if latest:
                 await self.publisher.post_summary(latest)
                 log.info("summary_posted", devices=len(latest))
+
         except Exception:
             log.exception("summary_error")
 
     async def prune_history(self) -> None:
         """Prune old location records based on retention settings."""
         try:
-            count = await self.db.prune_old_records(self.settings.history_retention_days)
+            days = self.settings.history_retention_days
+
+            with self.get_db() as db:
+                count = queries.prune_old_locations(db, days)
+
             if count > 0:
-                log.info("history_pruned", records_deleted=count)
+                log.info('history_pruned', records_deleted=count, older_than_days=days)
+
         except Exception:
             log.exception("prune_error")

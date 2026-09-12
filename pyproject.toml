@@ -30,6 +30,7 @@ dependencies = [
     "pytz>=2024.2",
     "h2>=4.1.0",
     "http-ece>=1.1.0",
+    "sqlmodel>=0.0.42",
 ]
 
 [project.scripts]

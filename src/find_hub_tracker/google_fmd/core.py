@@ -23,8 +23,10 @@ import structlog
 
 from find_hub_tracker.models import DeviceLocation
 from .location import get_location_data_for_device, parse_location_output, LocationRequestError, LocationRequestTimeout
-from .device import Device, list_devices
+from .device import list_devices
 from ..utils.cache import AsyncTTLCache
+
+from find_hub_tracker.models import DeviceInfo
 
 log = structlog.get_logger()
 
@@ -49,7 +51,7 @@ class GoogleFindMyDevices:
 
     def __init__(self, auth_dir: str = "Auth") -> None:
         self.auth_dir = Path(auth_dir)
-        self._devices_cache: AsyncTTLCache[list[Device]] = AsyncTTLCache(ttl=30)
+        self._devices_cache: AsyncTTLCache[list[DeviceInfo]] = AsyncTTLCache(ttl=30)
         self._cache_time: float = 0
         self._cache_ttl: float = 300
         self._gfmt_available = False
@@ -92,13 +94,13 @@ class GoogleFindMyDevices:
                 "Clone it and add its directory to PYTHONPATH, or vendor the modules."
             )
 
-    async def list_devices(self) -> list[Device]:
+    async def list_devices(self) -> list[DeviceInfo]:
         """List all registered Find Hub devices.
 
         Returns:
             List of Device objects.
         """
-        async def inner() -> list[Device]:
+        async def inner() -> list[DeviceInfo]:
             self._check_available()
             self._check_auth()
 
@@ -108,7 +110,7 @@ class GoogleFindMyDevices:
 
         return await self._devices_cache.get_or_set(inner)
 
-    async def get_device_location(self, device: Device) -> DeviceLocation | None:
+    async def get_device_location(self, device: DeviceInfo) -> DeviceLocation | None:
         """Request and retrieve the current location for a device.
 
         Args:
@@ -121,8 +123,8 @@ class GoogleFindMyDevices:
         self._check_auth()
 
         try:
-            output = await asyncio.to_thread(get_location_data_for_device, device.canonic_id, device.name, timeout=30)
-            return parse_location_output(output, device.canonic_id, device.name)
+            output = await asyncio.to_thread(get_location_data_for_device, device.id, device.name, timeout=30)
+            return parse_location_output(output, device.id)
 
         except LocationRequestTimeout:
             log.warning("location_request_timeout", device=device.name)

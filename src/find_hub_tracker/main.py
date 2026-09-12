@@ -126,7 +126,7 @@ def history(device: str, days: int) -> None:
             device_id = None
             for dev in all_devices:
                 if dev.name.lower() == device.lower():
-                    device_id = dev.device_id
+                    device_id = dev.id
                     break
 
             if device_id is None:
@@ -202,7 +202,7 @@ def devices() -> None:
             table.add_column("Last Location", style="dim")
 
             for dev in all_devices:
-                loc = latest_map.get(dev.device_id)
+                loc = latest_map.get(dev.id)
                 battery = "N/A"
                 last_loc = "No data"
                 if loc:

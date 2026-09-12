@@ -197,7 +197,7 @@ class PostgresBackend:
                    VALUES ($1, $2, $3, $4, NOW(), NOW())
                    ON CONFLICT (device_id) DO UPDATE
                    SET name = $2, device_type = $3, model = $4, last_seen = NOW()""",
-                device.device_id,
+                device.id,
                 device.name,
                 device.device_type,
                 device.model,
@@ -208,7 +208,7 @@ class PostgresBackend:
         # Ensure device exists
         await self.upsert_device(
             DeviceInfo(
-                device_id=location.device_id,
+                id=location.device_id,
                 name=location.device_name,
                 device_type=location.device_type,
             )
@@ -357,7 +357,7 @@ class PostgresBackend:
             rows = await conn.fetch("SELECT * FROM devices ORDER BY name")
             return [
                 DeviceInfo(
-                    device_id=r["device_id"],
+                    id=r["device_id"],
                     name=r["name"],
                     device_type=r["device_type"],
                     model=r["model"],
@@ -435,7 +435,7 @@ class SQLiteBackend:
                ON CONFLICT (device_id) DO UPDATE
                SET name = ?, device_type = ?, model = ?, last_seen = ?""",
             (
-                device.device_id,
+                device.id,
                 device.name,
                 device.device_type,
                 device.model,
@@ -453,7 +453,7 @@ class SQLiteBackend:
         """Insert a location record."""
         await self.upsert_device(
             DeviceInfo(
-                device_id=location.device_id,
+                id=location.device_id,
                 name=location.device_name,
                 device_type=location.device_type,
             )
@@ -616,7 +616,7 @@ class SQLiteBackend:
             rows = await cursor.fetchall()
             return [
                 DeviceInfo(
-                    device_id=r["device_id"],
+                    id=r["device_id"],
                     name=r["name"],
                     device_type=r["device_type"],
                     model=r["model"],

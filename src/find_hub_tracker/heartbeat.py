@@ -7,6 +7,9 @@ import platform
 import httpx
 import structlog
 
+from find_hub_tracker import __version__
+from find_hub_tracker.models import ServiceHeartBeat
+
 log = structlog.get_logger()
 
 
@@ -25,7 +28,10 @@ async def ping_healthchecks(url: str | None, *, success: bool = True) -> None:
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(target)
-            log.debug("healthchecks_pinged", url=target, status=resp.status_code)
+            resp.raise_for_status()
+
+        log.debug("healthchecks_pinged", url=target, status=resp.status_code)
+
     except Exception:
         log.warning("healthchecks_ping_failed", url=target, exc_info=True)
 
@@ -87,3 +93,16 @@ async def get_heartbeat_status(
     """
     resolved_host = host or platform.node() or "unknown"
     return await db.get_heartbeat(service_name, resolved_host)
+
+
+def make_heartbeat(poll_count: int, error_count: int, *, service_name: str = 'find-hub-tracker') -> ServiceHeartBeat:
+    host = platform.node() or 'unknown'
+    version = __version__
+
+    return ServiceHeartBeat(
+        service_name=service_name,
+        host=host,
+        poll_count=poll_count,
+        error_count=error_count,
+        version=version
+    )
