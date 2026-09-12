@@ -1,5 +1,7 @@
+import functools
 from contextlib import contextmanager
 from datetime import timedelta
+from typing import Callable, Awaitable
 
 import structlog
 
@@ -24,6 +26,27 @@ def has_moved_significantly(prev: DeviceLocation | None, cur: DeviceLocation) ->
         return True  # No previous location, so consider it significant
 
     return cur.distance_to(prev) >= SIGNIFICANT_MOVE_METERS
+
+
+def handle_error[F: Callable[..., Awaitable[None]]](
+    event: str,
+        *,
+        on_error: Callable[["App"], Awaitable[None]] | None = None,
+) -> Callable[[F], F]:
+    def decorator(func: F) -> F:
+        @functools.wraps(func)
+        async def wrapper(self, *args, **kwargs):
+            try:
+                return await func(self, *args, **kwargs)
+            except Exception:
+                log.exception(event)
+                if on_error is not None:
+                    await on_error(self)
+
+        return wrapper
+
+    return decorator
+
 
 
 class App:
@@ -133,21 +156,18 @@ class App:
 
         return devices, locations
 
+    @handle_error('poll_cycle_error', on_error=lambda self: self._handle_poll_failure())
     async def poll_locations(self) -> None:
-        try:
-            devices, locations = await self._fetch_locations()
+        devices, locations = await self._fetch_locations()
 
-            events = self._persist_poll(devices, locations)
+        events = self._persist_poll(devices, locations)
 
-            await self._publish_location_events(events)
+        await self._publish_location_events(events)
 
-            await ping_healthchecks(
-                self.settings.healthchecks_ping_url,
-                success=True,
-            )
-
-        except Exception:
-            await self._handle_poll_failure()
+        await ping_healthchecks(
+            self.settings.healthchecks_ping_url,
+            success=True,
+        )
 
     def _persist_poll(
             self,
@@ -195,8 +215,6 @@ class App:
     async def _handle_poll_failure(self) -> None:
         self._error_count += 1
 
-        log.exception("poll_cycle_error")
-
         try:
             with self.get_db(commit=True) as db:
                 heartbeat = make_heartbeat(
@@ -212,52 +230,44 @@ class App:
             success=False,
         )
 
+    @handle_error('battery_check_error')
     async def check_batteries(self) -> None:
         """Check battery levels for all tracked devices."""
-        try:
-            alerts = []
+        alerts = []
 
-            with self.get_db() as db:
-                candidates = queries.get_battery_check_data(db)
+        with self.get_db() as db:
+            candidates = queries.get_battery_check_data(db)
 
-                for device, location, last_alert in candidates:
-                    alert = self.battery_monitor.check(device, location, last_alert)
-                    if alert:
-                        db.add(alert)
-                        alerts.append(alert)
+            for device, location, last_alert in candidates:
+                alert = self.battery_monitor.check(device, location, last_alert)
+                if alert:
+                    db.add(alert)
+                    alerts.append(alert)
 
-            for alert in alerts:
-                await self.publisher.post_battery_alert(alert)
+        for alert in alerts:
+            await self.publisher.post_battery_alert(alert)
 
-            if alerts:
-                log.info("battery_alerts_sent", count=len(alerts))
+        if alerts:
+            log.info("battery_alerts_sent", count=len(alerts))
 
-        except Exception:
-            log.exception("battery_check_error")
 
+    @handle_error('summary_error')
     async def post_summary(self) -> None:
         """Post a periodic summary of all device locations to Discord."""
-        try:
-            with self.get_db() as db:
-                latest = queries.get_all_latest_locations(db)
+        with self.get_db() as db:
+            latest = queries.get_all_latest_locations(db)
 
-            if latest:
-                await self.publisher.post_summary(latest)
-                log.info("summary_posted", devices=len(latest))
+        if latest:
+            await self.publisher.post_summary(latest)
+            log.info("summary_posted", devices=len(latest))
 
-        except Exception:
-            log.exception("summary_error")
-
+    @handle_error('prune_error')
     async def prune_history(self) -> None:
         """Prune old location records based on retention settings."""
-        try:
-            days = self.settings.history_retention_days
+        days = self.settings.history_retention_days
 
-            with self.get_db() as db:
-                count = queries.prune_old_locations(db, days)
+        with self.get_db() as db:
+            count = queries.prune_old_locations(db, days)
 
-            if count > 0:
-                log.info('history_pruned', records_deleted=count, older_than_days=days)
-
-        except Exception:
-            log.exception("prune_error")
+        if count > 0:
+            log.info('history_pruned', records_deleted=count, older_than_days=days)
