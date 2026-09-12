@@ -32,7 +32,11 @@ def main() -> None:
     print()
 
     # Check Chrome is installed
-    chrome = shutil.which("google-chrome") or shutil.which("chrome") or shutil.which("chromium")
+    chrome = (
+        shutil.which("google-chrome")
+        or shutil.which("chrome")
+        or shutil.which("chromium")
+    )
     if not chrome:
         # Also check common Windows paths
         common_paths = [

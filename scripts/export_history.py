@@ -33,7 +33,11 @@ sys.path.insert(0, str(project_root / "src"))
 
 @click.command()
 @click.option(
-    "--format", "fmt", type=click.Choice(["csv", "json"]), default="json", help="Output format"
+    "--format",
+    "fmt",
+    type=click.Choice(["csv", "json"]),
+    default="json",
+    help="Output format",
 )
 @click.option("--output", "-o", default=None, help="Output file (default: stdout)")
 @click.option("--device", "-d", default=None, help="Filter by device name")
@@ -43,7 +47,9 @@ def export(fmt: str, output: str | None, device: str | None, days: int | None) -
     asyncio.run(_export(fmt, output, device, days))
 
 
-async def _export(fmt: str, output: str | None, device: str | None, days: int | None) -> None:
+async def _export(
+    fmt: str, output: str | None, device: str | None, days: int | None
+) -> None:
     from find_hub_tracker.config import get_settings
     from find_hub_tracker.db import create_backend
 

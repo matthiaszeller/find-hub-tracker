@@ -6,13 +6,11 @@ upstream. Until then, battery_percent will always be None and no alerts
 will fire.
 """
 
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 import structlog
 
-from find_hub_tracker.db import DatabaseBackend
-from find_hub_tracker.discord import DiscordPublisher
-from find_hub_tracker.models import BatteryAlert, DeviceLocation, DeviceInfo
+from find_hub_tracker.models import BatteryAlert, DeviceInfo, DeviceLocation
 from find_hub_tracker.utils import utc_now
 
 log = structlog.get_logger()
@@ -36,7 +34,12 @@ class BatteryMonitor:
         self.wearable_offset = wearable_offset
         self.cooldown = timedelta(minutes=cooldown_minutes)
 
-    def check(self, device: DeviceInfo, location: DeviceLocation, last_alert: BatteryAlert | None = None) -> BatteryAlert | None:
+    def check(
+        self,
+        device: DeviceInfo,
+        location: DeviceLocation,
+        last_alert: BatteryAlert | None = None,
+    ) -> BatteryAlert | None:
         if location.battery_percent is None:
             return None
 
@@ -63,14 +66,15 @@ class BatteryMonitor:
             alert_time=now,
         )
 
-    def _check_battery_level(self, device: DeviceInfo, loc: DeviceLocation) -> tuple[bool, bool]:
+    def _check_battery_level(
+        self, device: DeviceInfo, loc: DeviceLocation
+    ) -> tuple[bool, bool]:
         low, critical = self._thresholds_for(device.device_type)
 
         is_critical = loc.battery_percent <= critical
         is_low = loc.battery_percent <= low
 
         return is_low, is_critical
-
 
     def _thresholds_for(self, device_type: str) -> tuple[int, int]:
         """Return (low, critical) thresholds, adjusted for wearables."""

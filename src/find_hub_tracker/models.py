@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Self
 
-from sqlmodel import SQLModel, Field, Index, Relationship
+from sqlmodel import Field, Index, Relationship, SQLModel
 
 from find_hub_tracker.utils import utc_now
 from find_hub_tracker.utils.geo import haversine_distance
@@ -64,10 +64,7 @@ class DeviceLocation(SQLModel, table=True):
 
     def distance_to(self, other: Self) -> float:
         return haversine_distance(
-            self.latitude,
-            self.longitude,
-            other.latitude,
-            other.longitude
+            self.latitude, self.longitude, other.latitude, other.longitude
         )
 
 

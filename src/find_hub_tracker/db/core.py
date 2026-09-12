@@ -1,11 +1,13 @@
 from contextlib import contextmanager
 
+import structlog
 from sqlalchemy import Engine
-from sqlmodel import Session, create_engine as _create_engine
+from sqlmodel import Session
+from sqlmodel import create_engine as _create_engine
 
 from find_hub_tracker.config import Settings
 from find_hub_tracker.models import SQLModel
-import structlog
+
 log = structlog.get_logger()
 
 
@@ -24,5 +26,4 @@ def get_session(engine: Engine, *, commit: bool = False):
 
 def run_migrations(engine: Engine) -> None:
     SQLModel.metadata.create_all(engine)
-    log.info('sqlite_migrated')
-
+    log.info("sqlite_migrated")

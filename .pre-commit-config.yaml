@@ -1,0 +1,36 @@
+repos:
+-   repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0  # Use the latest version
+    hooks:
+    -   id: trailing-whitespace # Trailing whitespace checker
+    -   id: check-yaml # Check for YAML syntax errors
+    -   id: check-json # Check for JSON syntax errors
+    -   id: debug-statements # Check for pdb, ipdb, and print statements
+    -   id: end-of-file-fixer # Ensure files end in a newline
+    -   id: check-added-large-files # Prevent large files from being committed
+    -   id: check-merge-conflict # Check for files that contain merge conflict strings
+    -   id: check-symlinks # Check for symlinks which would be broken in checkout
+
+-   repo: https://github.com/psf/black
+    rev: 26.5.1  # Use the latest version
+    hooks:
+    -   id: black
+        name: black
+        types: [python]
+
+-   repo: https://github.com/pycqa/isort
+    rev: 9.0.1  # Use the latest version
+    hooks:
+    -   id: isort
+        name: isort
+        types: [python]
+        args: ["--profile", "black"] # REQUIRED, otherwise might have infinite loop
+                                     # because of black-isort disagreement
+
+-   repo: https://github.com/pycqa/flake8
+    rev: 7.3.0  # Use the latest version
+    hooks:
+    -   id: flake8
+        name: flake8
+        types: [python]
+        args: ['--max-line-length=110']

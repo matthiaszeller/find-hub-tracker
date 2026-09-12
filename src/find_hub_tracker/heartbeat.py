@@ -95,8 +95,10 @@ async def get_heartbeat_status(
     return await db.get_heartbeat(service_name, resolved_host)
 
 
-def make_heartbeat(poll_count: int, error_count: int, *, service_name: str = 'find-hub-tracker') -> ServiceHeartBeat:
-    host = platform.node() or 'unknown'
+def make_heartbeat(
+    poll_count: int, error_count: int, *, service_name: str = "find-hub-tracker"
+) -> ServiceHeartBeat:
+    host = platform.node() or "unknown"
     version = __version__
 
     return ServiceHeartBeat(
@@ -104,5 +106,5 @@ def make_heartbeat(poll_count: int, error_count: int, *, service_name: str = 'fi
         host=host,
         poll_count=poll_count,
         error_count=error_count,
-        version=version
+        version=version,
     )

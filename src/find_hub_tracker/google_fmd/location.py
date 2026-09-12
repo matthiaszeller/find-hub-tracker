@@ -1,24 +1,26 @@
-"""
+""" """
 
-"""
 import contextlib
 import io
 import threading
 from contextlib import redirect_stdout
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 
 import structlog
 
+from find_hub_tracker.models import DeviceLocation
+from find_hub_tracker.utils import utc_now
 from GoogleFindMyTools.Auth.fcm_receiver import FcmReceiver
-from GoogleFindMyTools.NovaApi.ExecuteAction.LocateTracker.decrypt_locations import decrypt_location_response_locations
-from GoogleFindMyTools.NovaApi.ExecuteAction.LocateTracker.location_request import create_location_request
+from GoogleFindMyTools.NovaApi.ExecuteAction.LocateTracker.decrypt_locations import (
+    decrypt_location_response_locations,
+)
+from GoogleFindMyTools.NovaApi.ExecuteAction.LocateTracker.location_request import (
+    create_location_request,
+)
 from GoogleFindMyTools.NovaApi.nova_request import nova_request
 from GoogleFindMyTools.NovaApi.scopes import NOVA_ACTION_API_SCOPE
 from GoogleFindMyTools.NovaApi.util import generate_random_uuid
 from GoogleFindMyTools.ProtoDecoders.decoder import parse_device_update_protobuf
-
-from find_hub_tracker.models import DeviceLocation
-from find_hub_tracker.utils import utc_now
 
 
 class LocationRequestError(Exception):
@@ -30,6 +32,7 @@ class LocationRequestTimeout(LocationRequestError):
 
 
 log = structlog.get_logger()
+
 
 def get_location_data_for_device(canonic_device_id, name, timeout=30) -> str:
     """
@@ -99,10 +102,14 @@ def get_location_data_for_device(canonic_device_id, name, timeout=30) -> str:
 
     error_output = captured.getvalue().strip()
     if error_output or response is None:
-        raise LocationRequestError(f"Nova API rejected the request: {error_output or 'No response'}")
+        raise LocationRequestError(
+            f"Nova API rejected the request: {error_output or 'No response'}"
+        )
 
     if not done.wait(timeout=timeout):
-        raise LocationRequestTimeout(f"No location response for {name} within {timeout}s")
+        raise LocationRequestTimeout(
+            f"No location response for {name} within {timeout}s"
+        )
 
     captured = io.StringIO()
     with redirect_stdout(captured):
@@ -112,9 +119,7 @@ def get_location_data_for_device(canonic_device_id, name, timeout=30) -> str:
     return output
 
 
-def parse_location_output(
-    output: str, canonic_id: str
-) -> DeviceLocation | None:
+def parse_location_output(output: str, canonic_id: str) -> DeviceLocation | None:
     """Parse the console output from GoogleFindMyTools into a DeviceLocation.
 
     The library prints lines like:

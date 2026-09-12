@@ -36,7 +36,9 @@ def _configure_logging(level: str = "INFO") -> None:
 
 
 @click.group()
-@click.option("--log-level", default=None, help="Override log level (DEBUG, INFO, WARNING, ERROR)")
+@click.option(
+    "--log-level", default=None, help="Override log level (DEBUG, INFO, WARNING, ERROR)"
+)
 def cli(log_level: str | None) -> None:
     """Google Find Hub device tracker with Discord notifications."""
     settings = get_settings()
@@ -87,9 +89,15 @@ def status() -> None:
             table.add_column("Last Seen")
 
             for loc in locations:
-                battery = f"{loc.battery_percent}%" if loc.battery_percent is not None else "N/A"
+                battery = (
+                    f"{loc.battery_percent}%"
+                    if loc.battery_percent is not None
+                    else "N/A"
+                )
                 accuracy = (
-                    f"{loc.accuracy_meters:.0f}m" if loc.accuracy_meters is not None else "N/A"
+                    f"{loc.accuracy_meters:.0f}m"
+                    if loc.accuracy_meters is not None
+                    else "N/A"
                 )
                 table.add_row(
                     loc.device_name,
@@ -154,9 +162,15 @@ def history(device: str, days: int) -> None:
             table.add_column("Maps Link", style="dim")
 
             for loc in locations:
-                battery = f"{loc.battery_percent}%" if loc.battery_percent is not None else "N/A"
+                battery = (
+                    f"{loc.battery_percent}%"
+                    if loc.battery_percent is not None
+                    else "N/A"
+                )
                 accuracy = (
-                    f"{loc.accuracy_meters:.0f}m" if loc.accuracy_meters is not None else "N/A"
+                    f"{loc.accuracy_meters:.0f}m"
+                    if loc.accuracy_meters is not None
+                    else "N/A"
                 )
                 table.add_row(
                     loc.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
@@ -285,7 +299,9 @@ def db_migrate() -> None:
         await db.connect()
         try:
             await db.migrate()
-            console.print(f"[green]Migrations complete ({settings.db_backend} backend).[/green]")
+            console.print(
+                f"[green]Migrations complete ({settings.db_backend} backend).[/green]"
+            )
         finally:
             await db.close()
 
@@ -305,7 +321,9 @@ def db_prune(days: int | None) -> None:
         await db.migrate()
         try:
             count = await db.prune_old_records(retention)
-            console.print(f"[green]Pruned {count} records older than {retention} days.[/green]")
+            console.print(
+                f"[green]Pruned {count} records older than {retention} days.[/green]"
+            )
         finally:
             await db.close()
 

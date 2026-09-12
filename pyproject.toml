@@ -43,6 +43,12 @@ find-hub = "find_hub_tracker.main:cli"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[dependency-groups]
+dev = [
+    "pre-commit>=4.6.2",
+    "pytest>=9.1.1",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/find_hub_tracker"]
 

@@ -13,20 +13,20 @@ upstream adds support.
 """
 
 import asyncio
-import contextlib
-import time
-from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
 
-from find_hub_tracker.models import DeviceLocation
-from .location import get_location_data_for_device, parse_location_output, LocationRequestError, LocationRequestTimeout
-from .device import list_devices
-from ..utils.cache import AsyncTTLCache
+from find_hub_tracker.models import DeviceInfo, DeviceLocation
 
-from find_hub_tracker.models import DeviceInfo
+from ..utils.cache import AsyncTTLCache
+from .device import list_devices
+from .location import (
+    LocationRequestError,
+    LocationRequestTimeout,
+    get_location_data_for_device,
+    parse_location_output,
+)
 
 log = structlog.get_logger()
 
@@ -37,6 +37,7 @@ _LOCATION_STATUS_MAP = {
     2: "crowdsourced",
     3: "aggregated",
 }
+
 
 class AuthError(Exception):
     """Raised when Google authentication is missing or invalid."""
@@ -100,6 +101,7 @@ class GoogleFindMyDevices:
         Returns:
             List of Device objects.
         """
+
         async def inner() -> list[DeviceInfo]:
             self._check_available()
             self._check_auth()
@@ -123,7 +125,9 @@ class GoogleFindMyDevices:
         self._check_auth()
 
         try:
-            output = await asyncio.to_thread(get_location_data_for_device, device.id, device.name, timeout=30)
+            output = await asyncio.to_thread(
+                get_location_data_for_device, device.id, device.name, timeout=30
+            )
             return parse_location_output(output, device.id)
 
         except LocationRequestTimeout:

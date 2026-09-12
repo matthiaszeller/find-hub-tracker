@@ -4,6 +4,7 @@ from typing import Generic, TypeVar
 
 T = TypeVar("T")
 
+
 class AsyncTTLCache(Generic[T]):
     def __init__(self, ttl: float) -> None:
         self._ttl = ttl

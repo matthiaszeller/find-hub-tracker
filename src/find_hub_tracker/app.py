@@ -1,24 +1,27 @@
 import functools
 from contextlib import contextmanager
 from datetime import timedelta
-from typing import Callable, Awaitable
+from typing import Awaitable, Callable
 
 import structlog
 
-from find_hub_tracker import __version__
 from find_hub_tracker.battery import BatteryMonitor
 from find_hub_tracker.config import Settings
 from find_hub_tracker.db import queries
 from find_hub_tracker.db.core import get_engine, get_session, run_migrations
 from find_hub_tracker.discord import DiscordPublisher
 from find_hub_tracker.google_fmd import GoogleFindMyDevices
-from find_hub_tracker.heartbeat import ping_healthchecks, record_heartbeat, make_heartbeat
-from find_hub_tracker.models import DeviceLocation, DeviceInfo, ServiceHeartBeat
+from find_hub_tracker.heartbeat import (
+    make_heartbeat,
+    ping_healthchecks,
+)
+from find_hub_tracker.models import DeviceInfo, DeviceLocation
 from find_hub_tracker.scheduler import Scheduler
 
 log = structlog.get_logger()
 
 SIGNIFICANT_MOVE_METERS = 100.0
+
 
 def has_moved_significantly(prev: DeviceLocation | None, cur: DeviceLocation) -> bool:
     """Determine if the device has moved significantly since the last known location."""
@@ -30,8 +33,8 @@ def has_moved_significantly(prev: DeviceLocation | None, cur: DeviceLocation) ->
 
 def handle_error[F: Callable[..., Awaitable[None]]](
     event: str,
-        *,
-        on_error: Callable[["App"], Awaitable[None]] | None = None,
+    *,
+    on_error: Callable[["App"], Awaitable[None]] | None = None,
 ) -> Callable[[F], F]:
     def decorator(func: F) -> F:
         @functools.wraps(func)
@@ -48,11 +51,12 @@ def handle_error[F: Callable[..., Awaitable[None]]](
     return decorator
 
 
-
 class App:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.fmd = GoogleFindMyDevices(auth_dir=str(settings.auth_secrets_path).rsplit("/", 1)[0])
+        self.fmd = GoogleFindMyDevices(
+            auth_dir=str(settings.auth_secrets_path).rsplit("/", 1)[0]
+        )
         self.publisher = DiscordPublisher(
             webhook_url=settings.discord_webhook_url,
             battery_webhook_url=settings.battery_webhook_url,
@@ -89,25 +93,23 @@ class App:
         self._scheduler.run_every(
             self.poll_locations,
             interval=timedelta(seconds=self.settings.poll_interval_seconds),
-            id="poll_locations"
+            id="poll_locations",
         )
 
         self._scheduler.run_every(
             self.check_batteries,
             interval=timedelta(seconds=self.settings.battery_check_interval_seconds),
-            id="battery_check"
+            id="battery_check",
         )
 
         self._scheduler.run_every(
             self.post_summary,
             interval=timedelta(hours=self.settings.summary_interval_hours),
-            id="summary_post"
+            id="summary_post",
         )
 
         self._scheduler.run_every(
-            self.prune_history,
-            interval=timedelta(hours=24),
-            id="history_prune"
+            self.prune_history, interval=timedelta(hours=24), id="history_prune"
         )
 
         # Post-startup tasks
@@ -137,7 +139,7 @@ class App:
         log.info("shutdown_complete")
 
     async def _fetch_locations(
-            self,
+        self,
     ) -> tuple[list[DeviceInfo], list[DeviceLocation]]:
         device_filter = self.settings.devices_to_track_list or None
 
@@ -155,7 +157,7 @@ class App:
 
         return devices, locations
 
-    @handle_error('poll_cycle_error', on_error=lambda self: self._handle_poll_failure())
+    @handle_error("poll_cycle_error", on_error=lambda self: self._handle_poll_failure())
     async def poll_locations(self) -> None:
         devices, locations = await self._fetch_locations()
 
@@ -169,9 +171,9 @@ class App:
         )
 
     def _persist_poll(
-            self,
-            devices: list[DeviceInfo],
-            locations: list[DeviceLocation],
+        self,
+        devices: list[DeviceInfo],
+        locations: list[DeviceLocation],
     ) -> list[tuple[DeviceLocation, DeviceLocation | None]]:
         location_events = []
         next_poll_count = self._poll_count + 1
@@ -181,8 +183,7 @@ class App:
                 queries.upsert_device(db, device)
 
             last_by_device_id = {
-                loc.device_id: loc
-                for loc in queries.get_all_latest_locations(db)
+                loc.device_id: loc for loc in queries.get_all_latest_locations(db)
             }
 
             for location in locations:
@@ -202,8 +203,8 @@ class App:
         return location_events
 
     async def _publish_location_events(
-            self,
-            location_events: list[tuple[DeviceLocation, DeviceLocation | None]],
+        self,
+        location_events: list[tuple[DeviceLocation, DeviceLocation | None]],
     ) -> None:
         for location, previous in location_events:
             if not has_moved_significantly(previous, location):
@@ -229,7 +230,7 @@ class App:
             success=False,
         )
 
-    @handle_error('battery_check_error')
+    @handle_error("battery_check_error")
     async def check_batteries(self) -> None:
         """Check battery levels for all tracked devices."""
         alerts = []
@@ -249,8 +250,7 @@ class App:
         if alerts:
             log.info("battery_alerts_sent", count=len(alerts))
 
-
-    @handle_error('summary_error')
+    @handle_error("summary_error")
     async def post_summary(self) -> None:
         """Post a periodic summary of all device locations to Discord."""
         with self.get_db() as db:
@@ -260,7 +260,7 @@ class App:
             await self.publisher.post_summary(latest)
             log.info("summary_posted", devices=len(latest))
 
-    @handle_error('prune_error')
+    @handle_error("prune_error")
     async def prune_history(self) -> None:
         """Prune old location records based on retention settings."""
         days = self.settings.history_retention_days
@@ -269,4 +269,4 @@ class App:
             count = queries.prune_old_locations(db, days)
 
         if count > 0:
-            log.info('history_pruned', records_deleted=count, older_than_days=days)
+            log.info("history_pruned", records_deleted=count, older_than_days=days)

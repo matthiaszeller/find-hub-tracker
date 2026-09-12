@@ -1,8 +1,13 @@
 from datetime import datetime, timedelta
 
-from sqlmodel import Session, select, func
+from sqlmodel import Session, func, select
 
-from find_hub_tracker.models import (DeviceInfo, DeviceLocation, ServiceHeartBeat, BatteryAlert)
+from find_hub_tracker.models import (
+    BatteryAlert,
+    DeviceInfo,
+    DeviceLocation,
+    ServiceHeartBeat,
+)
 from find_hub_tracker.utils import utc_now
 
 
@@ -40,18 +45,15 @@ def get_last_location(session: Session, device_id: str) -> DeviceLocation | None
 
 def get_all_latest_locations(session: Session) -> list[DeviceLocation]:
     """Return the most recent location for every device."""
-    ranked = (
-        select(
-            DeviceLocation,
-            func.row_number()
-            .over(
-                partition_by=DeviceLocation.device_id,
-                order_by=DeviceLocation.polled_at.desc(),
-            )
-            .label('row_number')
+    ranked = select(
+        DeviceLocation,
+        func.row_number()
+        .over(
+            partition_by=DeviceLocation.device_id,
+            order_by=DeviceLocation.polled_at.desc(),
         )
-        .subquery()
-    )
+        .label("row_number"),
+    ).subquery()
 
     statement = (
         select(DeviceLocation)
@@ -59,17 +61,16 @@ def get_all_latest_locations(session: Session) -> list[DeviceLocation]:
             ranked,
             DeviceLocation.device_id == ranked.c.device_id,
         )
-        .where(
-            ranked.c.row_number == 1
-        )
+        .where(ranked.c.row_number == 1)
         .order_by(DeviceLocation.device_id)
     )
 
     return list(session.exec(statement))
 
 
-
-def get_device_history(session: Session, device_id: str, start: datetime, end: datetime) -> list[DeviceLocation]:
+def get_device_history(
+    session: Session, device_id: str, start: datetime, end: datetime
+) -> list[DeviceLocation]:
     """Return location history for a device within a time range"""
     statement = (
         select(DeviceLocation)
@@ -92,9 +93,7 @@ def prune_old_locations(session: Session, days: int) -> int:
     Caller is responsible for committing the transaction."""
     cutoff = utc_now() - timedelta(days=days)
 
-    statement = select(DeviceLocation).where(
-        DeviceLocation.polled_at < cutoff
-    )
+    statement = select(DeviceLocation).where(DeviceLocation.polled_at < cutoff)
     locations = list(session.exec(statement))
 
     for location in locations:
@@ -103,20 +102,18 @@ def prune_old_locations(session: Session, days: int) -> int:
     return len(locations)
 
 
-def export_locations(session: Session, device_id: str | None = None, days: int | None = None) -> list[DeviceLocation]:
+def export_locations(
+    session: Session, device_id: str | None = None, days: int | None = None
+) -> list[DeviceLocation]:
     """Return location records for export, ordered chronologically."""
     statement = select(DeviceLocation)
 
     if device_id is not None:
-        statement = statement.where(
-            DeviceLocation.device_id == device_id
-        )
+        statement = statement.where(DeviceLocation.device_id == device_id)
 
     if days is not None:
         cutoff = utc_now() - timedelta(days=days)
-        statement = statement.where(
-            DeviceLocation.polled_at >= cutoff
-        )
+        statement = statement.where(DeviceLocation.polled_at >= cutoff)
 
     statement = statement.order_by(DeviceLocation.polled_at)
 
@@ -151,9 +148,12 @@ def upsert_heartbeat(session: Session, heartbeat: ServiceHeartBeat) -> ServiceHe
     return existing
 
 
-def get_heartbeat(session: Session, service_name: str, host: str) -> ServiceHeartBeat | None:
+def get_heartbeat(
+    session: Session, service_name: str, host: str
+) -> ServiceHeartBeat | None:
     """Return the heartbeat record for a service/host pair."""
     return session.get(ServiceHeartBeat, (service_name, host))
+
 
 def get_all_latest_battery_alerts(
     session: Session,
@@ -167,13 +167,10 @@ def get_all_latest_battery_alerts(
         .subquery()
     )
 
-    statement = (
-        select(BatteryAlert)
-        .join(
-            latest,
-            (latest.c.device_id == BatteryAlert.device_id)
-            & (latest.c.max_alert_time == BatteryAlert.alert_time),
-        )
+    statement = select(BatteryAlert).join(
+        latest,
+        (latest.c.device_id == BatteryAlert.device_id)
+        & (latest.c.max_alert_time == BatteryAlert.alert_time),
     )
 
     return list(session.exec(statement))
@@ -186,8 +183,7 @@ def get_battery_check_data(
     latest_locations = get_all_latest_locations(session)
 
     last_alerts = {
-        alert.device_id: alert
-        for alert in get_all_latest_battery_alerts(session)
+        alert.device_id: alert for alert in get_all_latest_battery_alerts(session)
     }
 
     return [

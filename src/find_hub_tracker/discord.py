@@ -113,7 +113,9 @@ class DiscordPublisher:
 
         fields = []
         for loc in locations:
-            battery = f" | {loc.battery_percent}%" if loc.battery_percent is not None else ""
+            battery = (
+                f" | {loc.battery_percent}%" if loc.battery_percent is not None else ""
+            )
             fields.append(
                 {
                     "name": loc.device_name,
@@ -247,7 +249,10 @@ def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     dphi = math.radians(lat2 - lat1)
     dlambda = math.radians(lon2 - lon1)
 
-    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    a = (
+        math.sin(dphi / 2) ** 2
+        + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    )
     return earth_radius * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
